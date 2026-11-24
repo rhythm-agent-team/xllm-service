@@ -34,6 +34,8 @@ cc_library(
     anthropic_adapter.cpp
     ${CMAKE_SOURCE_DIR}/third_party/xllm/xllm/api_service/chat_json_parser.cpp
     ${CMAKE_SOURCE_DIR}/third_party/xllm/xllm/api_service/anthropic_stream_utils.cpp
+    ${CMAKE_SOURCE_DIR}/third_party/xllm/xllm/api_service/json_fast_path.cpp
+    ${CMAKE_SOURCE_DIR}/third_party/xllm/xllm/api_service/json_scan.cpp
   INCLUDES
     ${CMAKE_SOURCE_DIR}/third_party/xllm
     ${CMAKE_SOURCE_DIR}/third_party/xllm/xllm
