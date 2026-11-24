@@ -38,7 +38,8 @@ class Scheduler final {
   Scheduler(const Options& options);
   ~Scheduler();
 
-  bool schedule(std::shared_ptr<Request> request);
+  bool schedule(std::shared_ptr<Request> request,
+                bool prefill_tokenizes = false);
 
   std::shared_ptr<brpc::Channel> get_channel(const std::string& target_name);
 

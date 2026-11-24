@@ -231,13 +231,35 @@ TEST(ChatJsonParserTest, NonObjectItemReturnsError) {
 
 TEST(ChatJsonParserTest, MissingTypeReturnsError) {
   expect_error(R"({"messages": [{"content": [{"text": "hello"}]}]})",
-               "Only text content arrays");
+               "Content array item type");
 }
 
-TEST(ChatJsonParserTest, NonTextTypeReturnsError) {
+TEST(ChatJsonParserTest, PreservesImageChatForPrefill) {
+  const std::string input = R"({
+    "model": "test",
+    "stream": true,
+    "messages": [
+      {"role": "system", "content": "Describe images."},
+      {"role": "user", "content": [
+        {"type": "text", "text": "What color is this?"},
+        {"type": "image_url", "image_url": {"url": "data:image/png;base64,AA=="}}
+      ]}
+    ]
+  })";
+  const auto result = normalize_chat_json(input);
+  ASSERT_TRUE(result.ok) << result.error;
+  const auto envelope = parse(result.json);
+  EXPECT_EQ(envelope["model"], "test");
+  EXPECT_EQ(envelope["stream"], true);
+  EXPECT_FALSE(envelope.contains("messages"));
+  EXPECT_EQ(result.image_request["messages"], parse(input)["messages"]);
+  EXPECT_EQ(result.image_request["temperature"], 1.0);
+}
+
+TEST(ChatJsonParserTest, MissingImageUrlReturnsError) {
   expect_error(
-      R"({"messages": [{"content": [{"type": "image_url", "image_url": {"url": "x"}}]}]})",
-      "Only text content arrays");
+      R"({"messages": [{"content": [{"type": "image_url", "image_url": {}}]}]})",
+      "Missing or invalid 'image_url.url'");
 }
 
 TEST(ChatJsonParserTest, MissingTextReturnsError) {

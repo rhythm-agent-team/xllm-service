@@ -182,7 +182,7 @@ void handle_first_send_request(brpc::Controller* cntl,
                                std::shared_ptr<T> call_data,
                                Scheduler* scheduler,
                                std::string service_request_id,
-                               bool stream) {
+                               bool expects_image_chat_ack) {
   std::unique_ptr<brpc::Controller> cntl_guard(cntl);
   if (cntl->Failed()) {
     LOG(ERROR) << "Fail to send stream generation, " << cntl->ErrorText();
@@ -190,6 +190,27 @@ void handle_first_send_request(brpc::Controller* cntl,
     scheduler->finish_request(service_request_id, /*error*/ true);
     return;
   }
+  if (!expects_image_chat_ack) {
+    return;
+  }
+  const std::string body = cntl->response_attachment().to_string();
+  if (body == "{\"accepted\":true}") {
+    return;
+  }
+  const auto response = nlohmann::json::parse(body, nullptr, false);
+  int32_t status = 0;
+  if (response.contains("error") && response["error"].contains("code") &&
+      response["error"]["code"].is_number_integer()) {
+    status = response["error"]["code"].get<int32_t>();
+  }
+  if (status >= 400 && status < 600) {
+    call_data->finish_with_http_error(status, body);
+  } else {
+    call_data->finish_with_error(
+        llm::Status(llm::StatusCode::UNAVAILABLE,
+                    "Prefill did not acknowledge the image chat request."));
+  }
+  scheduler->finish_request(service_request_id, /*error=*/true);
 }
 
 template <typename T>
@@ -329,7 +350,8 @@ size_t GetJsonContentLength(const brpc::Controller* ctrl) {
 
 template <typename T>
 void XllmHttpServiceImpl::handle(std::shared_ptr<T> call_data,
-                                 std::shared_ptr<Request> request) {
+                                 std::shared_ptr<Request> request,
+                                 std::string image_chat_body) {
   // record request
   auto& req_pb = call_data->request();
   bool success = scheduler_->record_new_request(call_data, request);
@@ -354,12 +376,18 @@ void XllmHttpServiceImpl::handle(std::shared_ptr<T> call_data,
                         call_data,
                         scheduler_,
                         request->service_request_id,
-                        request->stream);
+                        !image_chat_body.empty());
 
   if constexpr (std::is_same_v<T, CompletionCallData>) {
     stub.Completions(redirect_cntl, &req_pb, nullptr, done);
   } else if constexpr (std::is_same_v<T, ChatCallData>) {
-    stub.ChatCompletions(redirect_cntl, &req_pb, nullptr, done);
+    if (image_chat_body.empty()) {
+      stub.ChatCompletions(redirect_cntl, &req_pb, nullptr, done);
+    } else {
+      redirect_cntl->request_attachment().append(image_chat_body);
+      xllm::proto::HttpRequest http_request;
+      stub.ChatCompletionsHttp(redirect_cntl, &http_request, nullptr, done);
+    }
   } else if constexpr (std::is_same_v<T, AnthropicCallData>) {
     stub.ChatCompletions(redirect_cntl, &req_pb, nullptr, done);
   } else {
@@ -606,6 +634,7 @@ void XllmHttpServiceImpl::ChatCompletions(
 
   auto service_request = generate_request(req_pb, "/v1/chat/completions");
 
+  const bool image_chat = !chat_json.image_request.is_null();
   if (req_pb->messages_size() > 0) {
     service_request->messages.reserve(req_pb->messages_size());
     for (const auto& message : req_pb->messages()) {
@@ -641,14 +670,16 @@ void XllmHttpServiceImpl::ChatCompletions(
       service_request->tool_choice = req_pb->tool_choice();
     }
 
-    if (!scheduler_->schedule(service_request)) {
-      cntl->SetFailed("Schedule request failed!");
-      LOG(ERROR) << "Schedule request failed!";
-      return;
-    }
-  } else {
+  } else if (!image_chat) {
     cntl->SetFailed("Messages is empty!");
     LOG(ERROR) << "Messages is empty!";
+    return;
+  }
+
+  if (!scheduler_->schedule(service_request,
+                            /*prefill_tokenizes=*/image_chat)) {
+    cntl->SetFailed("Schedule request failed!");
+    LOG(ERROR) << "Schedule request failed!";
     return;
   }
 
@@ -662,8 +693,25 @@ void XllmHttpServiceImpl::ChatCompletions(
                 service_request->routing.prefill_name,
                 "/v1/chat/completions",
                 /*is_post=*/true,
-                attachment,
+                cntl->request_attachment().to_string(),
                 service_request->stream);
+    return;
+  }
+
+  if (image_chat) {
+    if (service_request->routing.decode_name.empty()) {
+      cntl->SetFailed("The image chat request requires a P/D route.");
+      return;
+    }
+    auto& body = chat_json.image_request;
+    body.erase("serviceRequestId");
+    body.erase("sourceXserviceAddr");
+    body["service_request_id"] = service_request->service_request_id;
+    body["source_xservice_addr"] = options_.service_name();
+    body["routing"] = service_request->routing.serialize_to_json();
+    auto call_data = std::make_shared<ChatCallData>(
+        cntl, service_request->stream, done_guard.release(), req_pb, resp_pb);
+    handle(call_data, service_request, body.dump());
     return;
   }
 

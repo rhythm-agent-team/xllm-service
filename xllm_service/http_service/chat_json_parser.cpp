@@ -17,7 +17,8 @@ limitations under the License.
 
 #include <glog/logging.h>
 
-#include <nlohmann/json.hpp>
+#include <utility>
+#include <vector>
 
 namespace xllm_service {
 namespace {
@@ -38,20 +39,36 @@ ChatJsonResult normalized_json_result(nlohmann::json&& json,
 }
 
 std::pair<bool, std::string> text_content(const nlohmann::json& content,
-                                          std::string* text) {
+                                          std::string* text,
+                                          bool* has_image) {
   size_t total_size = 0;
+  bool image_in_message = false;
   for (const auto& item : content) {
     if (!item.is_object()) {
       return {false, "Content array item must be an object."};
     }
-    if (!item.contains("type") || item["type"] != "text") {
-      return {false,
-              "Only text content arrays are supported by this chat endpoint."};
+    const auto type = item.find("type");
+    if (type == item.end() || (*type != "text" && *type != "image_url")) {
+      return {false, "Content array item type must be 'text' or 'image_url'."};
+    }
+    if (*type == "image_url") {
+      const auto image = item.find("image_url");
+      if (image == item.end() || !image->is_object() ||
+          !image->contains("url") || !(*image)["url"].is_string() ||
+          (*image)["url"] == "") {
+        return {false, "Missing or invalid 'image_url.url' in content item."};
+      }
+      image_in_message = true;
+      continue;
     }
     if (!item.contains("text") || !item["text"].is_string()) {
       return {false, "Missing or invalid 'text' field in content item."};
     }
     total_size += item["text"].get_ref<const std::string&>().size();
+  }
+  if (image_in_message) {
+    *has_image = true;
+    return {true, ""};
   }
 
   if (!content.empty()) {
@@ -109,6 +126,9 @@ ChatJsonResult normalize_chat_json(std::string json_str) {
           std::move(json), std::move(json_str), modified);
     }
 
+    bool has_image = false;
+    std::vector<std::pair<nlohmann::json*, std::string>> text_messages;
+    text_messages.reserve(json["messages"].size());
     for (auto& message : json["messages"]) {
       if (!message.is_object()) {
         return json_error("Message in 'messages' array must be an object.");
@@ -118,11 +138,22 @@ ChatJsonResult normalize_chat_json(std::string json_str) {
       }
 
       std::string text;
-      auto [ok, error] = text_content(message["content"], &text);
+      auto [ok, error] = text_content(message["content"], &text, &has_image);
       if (!ok) {
         return json_error(error);
       }
-      message["content"] = std::move(text);
+      text_messages.emplace_back(&message["content"], std::move(text));
+    }
+
+    if (has_image) {
+      nlohmann::json messages = std::move(json["messages"]);
+      json.erase("messages");
+      std::string envelope = json.dump();
+      json["messages"] = std::move(messages);
+      return {true, std::move(envelope), "", std::move(json)};
+    }
+    for (auto& [content, text] : text_messages) {
+      *content = std::move(text);
       modified = true;
     }
 

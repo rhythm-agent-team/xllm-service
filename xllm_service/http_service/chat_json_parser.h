@@ -15,8 +15,8 @@ limitations under the License.
 
 #pragma once
 
+#include <nlohmann/json.hpp>
 #include <string>
-#include <utility>
 
 namespace xllm_service {
 
@@ -24,11 +24,11 @@ struct ChatJsonResult {
   bool ok = true;
   std::string json;
   std::string error;
+  nlohmann::json image_request;
 };
 
-// Normalize OpenAI-style chat JSON for the text-only ChatRequest proto.
-// Applies OpenAI defaults, maps compatibility fields, and collapses text-only
-// content arrays to a string before protobuf parsing.
+// Apply OpenAI defaults. For image chat, retain the complete body for VLM
+// Prefill and return the request fields outside messages for gateway parsing.
 ChatJsonResult normalize_chat_json(std::string json_str);
 
 }  // namespace xllm_service

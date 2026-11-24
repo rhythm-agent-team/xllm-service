@@ -100,7 +100,9 @@ class XllmHttpServiceImpl : public proto::XllmHttpService {
               const std::string& method);
 
   template <typename T>
-  void handle(std::shared_ptr<T> call_data, std::shared_ptr<Request> request);
+  void handle(std::shared_ptr<T> call_data,
+              std::shared_ptr<Request> request,
+              std::string image_chat_body = {});
 
   void get_serving_models(::google::protobuf::RpcController* controller,
                           const proto::HttpRequest* request,

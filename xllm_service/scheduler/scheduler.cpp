@@ -180,7 +180,8 @@ void Scheduler::start_kv_event_discovery() {
   });
 }
 
-bool Scheduler::schedule(std::shared_ptr<Request> request) {
+bool Scheduler::schedule(std::shared_ptr<Request> request,
+                         bool prefill_tokenizes) {
   // For vLLM backend clusters we forward the client's raw OpenAI JSON straight
   // through to vLLM, which applies its own chat template and tokenization. So
   // skip the local chat-template + tokenize steps entirely (leaving token_ids
@@ -232,8 +233,10 @@ bool Scheduler::schedule(std::shared_ptr<Request> request) {
   }
   DLOG(INFO) << request->routing.debug_string();
 
-  // update request metrics
-  if (!is_vllm && request->prompt.size() != 0) {
+  // Account for P/D requests even when Prefill determines the token count.
+  if (!is_vllm &&
+      (!request->prompt.empty() ||
+       (prefill_tokenizes && !request->routing.decode_name.empty()))) {
     instance_mgr_->update_request_metrics(request, RequestAction::SCHEDULE);
   }
 

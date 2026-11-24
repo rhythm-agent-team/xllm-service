@@ -169,16 +169,22 @@ class StreamCallData : public CallData {
     constexpr bool kAnthropic =
         std::is_same_v<Response, ::xllm::proto::AnthropicMessagesResponse>;
     const auto [http_status, body] = serialize_http_error(status, kAnthropic);
-    if (!stream_) {
-      controller_->http_response().set_status_code(http_status);
-      controller_->http_response().set_content_type("application/json");
-      return write_and_finish(body);
-    }
     if constexpr (kAnthropic) {
-      finished_ = true;
-      return write("event: error\ndata: " + body + "\n\n");
+      if (stream_) {
+        finished_ = true;
+        return write("event: error\ndata: " + body + "\n\n");
+      }
     }
-    return write("data: " + body + "\n\n") && finish();
+    return finish_with_http_error(http_status, body);
+  }
+
+  bool finish_with_http_error(int32_t http_status, const std::string& body) {
+    if (stream_) {
+      return write("data: " + body + "\n\n") && finish();
+    }
+    controller_->http_response().set_status_code(http_status);
+    controller_->http_response().set_content_type("application/json");
+    return write_and_finish(body);
   }
 
   // For stream response
